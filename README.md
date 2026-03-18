@@ -1,7 +1,48 @@
-import block_structure from '../../../img/csapp/malloc_lab/block_structure.png';
-import hdr_ftr_structure from '../../../img/csapp/malloc_lab/hdr_ftr_structure.png';
-import heap_layout from '../../../img/csapp/malloc_lab/heap_layout.png';
-import implicit_results from '../../../img/csapp/malloc_lab/implicit_free_list_results.png';
+
+# Memory Allocator in C
+
+---
+
+## How to Run
+
+1. **Build the allocator and driver:**
+	```sh
+	make
+	```
+
+2. **Run the driver:**
+	```sh
+	./bin/mdriver -t traces/<tracefile>
+	```
+	Example:
+	```sh
+	./bin/mdriver -t traces/amptjp.rep
+	```
+
+3. **Clean build files:**
+	```sh
+	make clean
+	```
+
+---
+
+## Project Structure
+
+```
+memory-allocator/
+├── img/              # Diagrams and images for documentation
+├── src/              # Source code and build output
+│   ├── bin/          # Compiled binaries (after make)
+│   ├── traces/       # Trace files for testing
+│   ├── *.c, *.h      # Source and header files
+│   └── ...
+├── README.md         # This file
+└── Makefile          # Build instructions
+```
+
+> **Note:** The `traces/` folder contains test traces and reference outputs. Binaries like `mdriver` are created in `src/bin/` after running `make`.
+
+---
 
 # Memory Allocator in C
 
@@ -47,7 +88,7 @@ mm_realloc(ptr) // Resize allocation
 # Design 1: Implicit Free List
 
 ## Heap Layout
-<img src={heap_layout} alt="Heap layout" style={{maxWidth: '300px', width: '100%', height: 'auto'}} />
+![Heap layout](./img/heap_layout.png)
 
 The heap is organized as a sequence of blocks:
 - Prologue block: simplifies boundary conditions
@@ -60,7 +101,7 @@ They eliminate edge cases during coalescing and prevent invalid memory access at
 ---
 
 ## Block Structure
-<img src={block_structure} alt="Block structure" style={{maxWidth: '300px', width: '100%', height: 'auto'}} />
+![Block structure](./img/block_structure.png)
 
 Each block consists of:
 - Header: stores size and allocation status
@@ -73,7 +114,7 @@ Footers enable constant-time coalescing with the previous block.
 ---
 
 ## Header/Footer Encoding
-<img src={hdr_ftr_structure} alt="Header/Footer structure" style={{maxWidth: '300px', width: '100%', height: 'auto'}} />
+![Header/Footer structure](./img/hdr_ftr_structure.png)
 
 Each header/footer stores:
 - Block size (aligned to 8 bytes)
@@ -111,7 +152,7 @@ When freeing a block:
 
 # Implicit Free List Results
 
-<img src={implicit_results} alt="Implicit Free List Results" style={{maxWidth: '300px', width: '100%', height: 'auto'}} />
+![Implicit Free List Results](./img/implicit_free_list_results.png)
 
 ## Memory Utilization
 High utilization due to minimal metadata overhead.
