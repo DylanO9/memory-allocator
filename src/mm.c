@@ -77,13 +77,27 @@ void place(void *bp, size_t asize);
 #define GET_ALLOC(p)        (GET(p) & 0x1)
 
 /* From a payload -> calculate the header_ptr or footer_ptr */
-#define HDRP(bp)            ((char *)bp - WSIZE) 
-#define FTRP(bp)            ((char *)bp + GET_SIZE(HDRP(bp)) - DSIZE) /* Payload size stores size including header and footer, which is why we do - DSIZE */
+#define HDRP(bp)            ((char *)bp - sizeof(ll_node) - DSIZE) 
+#define LLPTR(bp)           ((ll_node *)(((char *)bp) - sizeof(ll_node))) 
 #define NODE(bp)            ((ll_node *)((char *)bp - sizeof(ll_node) - WSIZE))
+
+/* From a ll_node to a header pointer */
+#define HDRP_FROM_NODE(node)          ((char *)node - DSIZE)
+#define HDRP_TO_NODE(hdrp)              ((ll_node *)(hdrp + DSIZE))
+#define HDRP_TO_BLKP(hdrp)             ((void *)(hdrp + DSIZE + sizeof(ll_node)))
+ 
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+
+/* Explicit Free List Macros */
+#define MIDDLE_INSERT(left, mid, right) do { \
+    mid->next = right; \
+    mid->prev = left; \
+    left->next = mid; \
+    right->prev = mid; \
+} while(0)
 
 /* 
  * mm_init - initialize the malloc package.
@@ -127,19 +141,18 @@ static void *extend_heap(size_t words)
     ll_node *prev = dummy_tail->prev;
     bp -= sizeof(ll_node);
     PUT(bp, PACK(size, 0));
+
+    /* Assign dummy_tail to the top of the heap */
     dummy_tail = (ll_node *)(bp + size);
     dummy_tail->next = NULL;
     
+    /* Move block pointer by the size of the header to be at the ll_node struct */
     bp = bp + DSIZE;
     
-    /* Insert this block at the end of the current heap */
-    ll_node* curr = (ll_node*)bp;
-    curr->next = dummy_tail;
-    curr->prev = prev;
-    prev->next = curr;
-    dummy_tail->prev = curr;
+    /* Insert the new_block in between the previous and dummy_tail */
+    ll_node* new_block = (ll_node*)bp;
+    MIDDLE_INSERT(prev, new_block, dummy_tail);
 
-    //return (void*)(bp + sizeof(ll_node));
     return coalesce((void *)(bp + sizeof(ll_node)));
 }
 
@@ -148,12 +161,12 @@ static void *extend_heap(size_t words)
  */ 
 static void *coalesce(void *bp)
 {
-    char *hdr_ptr = (((char *)bp) - sizeof(ll_node) - DSIZE);
-    ll_node *bp_node = (ll_node *)(hdr_ptr + DSIZE);
+    char *hdr_ptr = HDRP(bp); 
+    ll_node *bp_node = LLPTR(bp); 
     ll_node *prev = bp_node->prev;
     ll_node *next = bp_node->next;
-    char *prev_hdr = (((char *)prev) - DSIZE);
-    char *next_hdr = (((char *)next) - DSIZE);
+    char *prev_hdr = HDRP_FROM_NODE(prev); 
+    char *next_hdr = HDRP_FROM_NODE(next); 
 
     /* Check if prev block is dummy_head */
     int can_prev_coalesce = prev == dummy_head || (prev_hdr + GET_SIZE(prev_hdr)) != hdr_ptr ? 0 : 1;
@@ -168,28 +181,26 @@ static void *coalesce(void *bp)
         /* All can coaslesce */
         size_t new_size = GET_SIZE(prev_hdr) + GET_SIZE(hdr_ptr) + GET_SIZE(next_hdr);        
         PUT(prev_hdr, PACK(new_size, 0));
-
         prev->next = next->next;
         next->next->prev = prev;
-        /* Does not matter what is inside the other memory because we are never going to use it anymore - the programmer will */
-        return (void *)(prev_hdr + DSIZE + sizeof(ll_node));
+
+        return HDRP_TO_BLKP(prev_hdr); 
     } else if (can_prev_coalesce) {
         /* Only prev */
         size_t new_size = GET_SIZE(prev_hdr) + GET_SIZE(hdr_ptr);        
         PUT(prev_hdr, PACK(new_size, 0));
-
         prev->next = bp_node->next;
         next->prev = prev;
-        return (void *)(prev_hdr + DSIZE + sizeof(ll_node));
+
+        return HDRP_TO_BLKP(prev_hdr); 
     } else if (can_next_coalesce) {
         /* Only next */
         size_t new_size = GET_SIZE(next_hdr) + GET_SIZE(hdr_ptr);        
         PUT(hdr_ptr, PACK(new_size, 0));
-
         bp_node->next = next->next;
         next->next->prev = bp_node; 
         
-        return (void *)(hdr_ptr + DSIZE + sizeof(ll_node));
+        return HDRP_TO_BLKP(hdr_ptr);
     } 
     return NULL;
 }
@@ -229,8 +240,8 @@ void *mm_malloc(size_t size)
 }
 
 /*
- * find_block - Use the best-fit algorithm to find the block that satisfies the request with the
- *      least amount of space used
+ * find_block - Use first-fit placement policy
+ *      
  */ 
 static void *find_block(size_t asize)
 {
@@ -250,29 +261,26 @@ static void *find_block(size_t asize)
 void place(void *bp, size_t asize)
 {
     /* Gauranteed to have a prev and next block because never can use place() on dummy_head or dummy_tail */
-    char* header_ptr = (((char *)bp) - sizeof(ll_node) - DSIZE);
-    size_t csize = GET_SIZE(header_ptr);
+    char* hdr_ptr = HDRP(bp);
+    size_t csize = GET_SIZE(hdr_ptr);
     size_t min_block_size = sizeof(ll_node) + DSIZE + DSIZE;
-    ll_node* curr = (ll_node *)((((char *)bp) - sizeof(ll_node))); 
+    ll_node* curr = LLPTR(bp); 
     if ((csize - asize) < (min_block_size)) {
         /* No split */
         curr->prev->next = curr->next;
         curr->next->prev = curr->prev;
-        PUT(header_ptr, PACK(GET_SIZE(header_ptr), 1));
+        PUT(hdr_ptr, PACK(GET_SIZE(hdr_ptr), 1));
     } else {
        /* Split */ 
-        PUT(header_ptr, PACK(asize, 1));
+        PUT(hdr_ptr, PACK(asize, 1));
 
         /* Make new block from split */
-        char* new_block = header_ptr + asize;
+        char* new_block = hdr_ptr + asize;
         PUT(new_block, PACK(csize-asize, 0));
         ll_node *new_block_ptrs = (ll_node *)(new_block + DSIZE);
          
         /* Insert this block into the free list */
-        new_block_ptrs->prev = curr->prev;
-        new_block_ptrs->next = curr->next;
-        curr->prev->next = new_block_ptrs;
-        curr->next->prev = new_block_ptrs;
+        MIDDLE_INSERT(curr->prev, new_block_ptrs, curr->next);
     }
 }
 
@@ -281,17 +289,20 @@ void place(void *bp, size_t asize)
  */
 void mm_free(void *ptr)
 {
-    ll_node *curr = (ll_node *)(((char *)ptr) - sizeof(ll_node));
+    char* hdr_ptr = HDRP(ptr); 
+    ll_node *curr = LLPTR(ptr); 
     ll_node *next = NULL;
-    char* curr_ptr = (((char *)ptr) - sizeof(ll_node) - DSIZE);
-    PUT(curr_ptr, PACK(GET_SIZE(curr_ptr), 0));
-    curr_ptr += GET_SIZE(curr_ptr); 
-    while (curr_ptr != (char *)dummy_tail) {
-        if (!GET_ALLOC(curr_ptr)) {
-            next = (ll_node *)(curr_ptr + sizeof(ll_node)); 
+    PUT(hdr_ptr, PACK(GET_SIZE(hdr_ptr), 0));
+    hdr_ptr += GET_SIZE(hdr_ptr); 
+
+    while (hdr_ptr != (char *)dummy_tail) {
+        if (!GET_ALLOC(hdr_ptr)) {
+            /* Found the block that should be after the block to be freed */
+            /* Header Pointer to a Node ptr */
+            next = HDRP_TO_NODE(hdr_ptr);
             break;
         }
-        curr_ptr += GET_SIZE(curr_ptr);
+        hdr_ptr += GET_SIZE(hdr_ptr);
     }
 
     /* Place it before the tail */
@@ -299,10 +310,8 @@ void mm_free(void *ptr)
         next = dummy_tail;
     
     /* Place the curr before next */
-    curr->prev = next->prev;
-    curr->next = next;
-    next->prev->next = curr;   
-    next->prev = curr; 
+    MIDDLE_INSERT(next->prev, curr, next);
+
     coalesce(ptr);
 }
 
@@ -333,14 +342,13 @@ void *mm_realloc(void *ptr, size_t size)
     /* Is the block directly after free and not dummy_tail */
      
 
-    char *hdr_ptr = (((char *)ptr) - sizeof(ll_node) - DSIZE);
+    char *hdr_ptr = HDRP(ptr); 
     char *next_hdr = hdr_ptr + GET_SIZE(hdr_ptr);
     
     /* Check if next block is dummy_tail */
     int can_next_coalesce = next_hdr == (char *)dummy_tail || GET_ALLOC(next_hdr) || GET_SIZE(next_hdr) + GET_SIZE(hdr_ptr) < asize ? 0 : 1; 
     
-    ll_node *curr = (ll_node *)(hdr_ptr + DSIZE);   /* The current block's ll_node */
-    ll_node *next = (ll_node *)(next_hdr + DSIZE);  /* The next block's ll_node */
+    ll_node *next = HDRP_TO_NODE(next_hdr); /* The next block's ll_node */
 
     if (asize <= GET_SIZE(hdr_ptr)) {
         return ptr;
@@ -373,10 +381,7 @@ void *mm_realloc(void *ptr, size_t size)
             ll_node *rem_node = (ll_node *)(rem_hdr + DSIZE);
 
             /* put remainder back into free list where next used to be */
-            rem_node->prev = prev_free;
-            rem_node->next = next_free;
-            prev_free->next = rem_node;
-            next_free->prev = rem_node;
+            MIDDLE_INSERT(prev_free, rem_node, next_free);
         }
         return ptr;
     } else {
